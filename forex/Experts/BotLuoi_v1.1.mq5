@@ -65,9 +65,8 @@ input double  maxVolumnSellHedge = 0.32; // Max Volumn Khi mở lệnh sell hedg
 
 input group "[TỈA LỆNH] CẤU HÌNH TỈA LỆNH";
 input bool  enableTiaLenh = true; // Bật/tắt chức năng tỉa lệnh
-input int  soLenhToiThieuDeTia = 20; // Số lệnh tối thiểu để tỉa
-input double  phanTramTiaLenh = 30; // Phần trăm khối lượng tỉa mỗi lần (0-100)
-input double  khoangCachTiaLenh = 2; // Khoảng cách giá để tỉa lệnh (points)
+input int  soLenhToiThieuDeTia = 30; // Số lệnh tối thiểu để tỉa
+input double maxDrawdow = 30; // drawdow tài khoản cần tỉa viết 1 -> 100
 
 int Magic_Hedge = 111;
 ulong ticketHedge = 0; 
@@ -76,7 +75,10 @@ double ddProfit = 0;
 
 int maHandle;
 double maBuffer[];
-string trend;
+string currentTrend = "SIDEWAY";
+datetime lastCheck = 0; 
+datetime trendStartTime = 0;
+datetime lastCheckTiaLenh = 0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -101,8 +103,37 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    updateReport(); 
+   Comment(
+      "⏰ Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS), "\n",
+      "📈 Trend: ", currentTrend
+   );
    
-   trend = CheckTrend();
+   if(TimeCurrent() - lastCheck >= 20) // check mỗi 20s
+   {
+      string newTrend = CheckTrend();
+
+      // Nếu trend hiện tại là SIDEWAY -> cho đổi ngay
+      if(currentTrend == "SIDEWAY")
+      {
+         currentTrend = newTrend;
+         trendStartTime = TimeCurrent();
+         drawArrow(currentTrend);
+      }
+      else
+      {
+         // Nếu trend mới khác và đã giữ trend cũ >= 3 phút
+         if(newTrend != currentTrend && (TimeCurrent() - trendStartTime >= 3*60))
+         {
+            currentTrend = newTrend;
+            trendStartTime = TimeCurrent();
+            drawArrow(currentTrend);
+         }
+      }
+
+      Print("Trend use check: ", currentTrend);
+      Print("Trend Now: ", newTrend);
+      lastCheck = TimeCurrent(); 
+   }
      
    
    double minPriceBuy = DBL_MAX;
@@ -151,65 +182,8 @@ void OnTick()
       }
    }
    
-   // tỉa lệnh xa nhất 
-   if(enableTiaLenh && totalPositonBUY > soLenhToiThieuDeTia)
-   {
-      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double pointValue = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      
-      ulong selectedTicket = 0;
-      double maxDistance = -1;
-      double maxLoss = 0;
-      
-      // Tìm lệnh BUY thỏa điều kiện
-      for(int i = 0; i < PositionsTotal(); i++)
-      {
-         ulong ticket = PositionGetTicket(i);
-         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY && 
-            PositionGetInteger(POSITION_MAGIC) == EXPERT_MAGIC)
-         {
-            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            double profit = PositionGetDouble(POSITION_PROFIT);
-            double volume = PositionGetDouble(POSITION_VOLUME);
-            
-            // Tính khoảng cách từ giá mở đến giá hiện tại
-            double distance = MathAbs(openPrice - currentPrice);
-            
-            // Chọn lệnh có khoảng cách xa nhất và lỗ nhiều nhất
-            if(distance > maxDistance || (distance == maxDistance && profit < maxLoss))
-            {
-               maxDistance = distance;
-               maxLoss = profit;
-               selectedTicket = ticket;
-            }
-         }
-   }
+    
    
-   // Nếu tìm thấy lệnh thỏa điều kiện
-   if(selectedTicket != 0 && PositionSelectByTicket(selectedTicket))
-      {
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         double profit = PositionGetDouble(POSITION_PROFIT);
-         double volume = PositionGetDouble(POSITION_VOLUME);
-         
-            // Kiểm tra điều kiện tỉa lệnh
-            if( MathAbs(openPrice - currentPrice) >= khoangCachTiaLenh * pointValue && profit < 0)
-            {
-               double volumeToClose = volume * (phanTramTiaLenh/100);
-               if(volumeToClose < SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
-                  volumeToClose = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-                  
-               if(trade.PositionClosePartial(selectedTicket, volumeToClose))
-               {
-                  Print("Đã tỉa lệnh BUY #", selectedTicket, " khối lượng ", volumeToClose);
-               }
-               else
-               {
-                  Print("Lỗi khi tỉa lệnh BUY #", selectedTicket, ": ", GetLastError());
-               }
-            }
-      }
-   }
    
    // Handle BUY
    if(totalPositonBUY == 0)
@@ -245,7 +219,7 @@ void OnTick()
    }
    
    // Handle SELL HEDGE
-   if(openHedge == true && totalPositonHedge == 0 && trend != "UP")
+   if(openHedge == true && totalPositonHedge == 0 && currentTrend != "UP_STRONG" && currentTrend != "UP_WEAK")
    {
       if(ticketHedge == 0)
       {
@@ -300,6 +274,13 @@ void OnTick()
          }
       }
    }
+   
+   // tỉa lệnh
+   //if(TimeCurrent() - lastCheckTiaLenh >= 60*60 && enableTiaLenh)
+   //{
+      tiaLenhThongMinh();
+      lastCheckTiaLenh = TimeCurrent();
+   //}
 }
 
 //+------------------------------------------------------------------+
@@ -428,58 +409,279 @@ void paintlable()
 
 string CheckTrend()
 {
-   string name;
-   datetime t = TimeCurrent();
    
-   // --- MA settings
-   int fastMA = iMA(_Symbol, _Period, 20, 0, MODE_SMA, PRICE_CLOSE);
-   int slowMA = iMA(_Symbol, _Period, 50, 0, MODE_SMA, PRICE_CLOSE);
+   // --- MA settings cho khung cao hơn
+   int fastMAHigher = iMA(_Symbol, _Period, 20, 0, MODE_SMA, PRICE_CLOSE);
+   int slowMAHigher = iMA(_Symbol, _Period, 50, 0, MODE_SMA, PRICE_CLOSE);
+
+   double fastBufHigher[], slowBufHigher[];
+   CopyBuffer(fastMAHigher, 0, 0, 3, fastBufHigher);
+   CopyBuffer(slowMAHigher, 0, 0, 3, slowBufHigher);
+
+   // --- MA settings cho khung hiện tại
+   int fastMA = iMA(_Symbol, _Period, 14, 0, MODE_SMA, PRICE_CLOSE);
+   int slowMA = iMA(_Symbol, _Period, 28, 0, MODE_SMA, PRICE_CLOSE);
 
    double fastBuf[], slowBuf[];
-   CopyBuffer(fastMA, 0, 0, 1, fastBuf);
-   CopyBuffer(slowMA, 0, 0, 1, slowBuf);
+   CopyBuffer(fastMA, 0, 0, 3, fastBuf);
+   CopyBuffer(slowMA, 0, 0, 3, slowBuf);
 
-   double fast = fastBuf[0];
-   double slow = slowBuf[0];
+   // Kiểm tra xu hướng MA trên cả 2 khung thời gian
+   bool trendUpHigher = fastBufHigher[0] > slowBufHigher[0] && fastBufHigher[1] > slowBufHigher[1];
+   bool trendDownHigher = fastBufHigher[0] < slowBufHigher[0] && fastBufHigher[1] < slowBufHigher[1];
+   
+   bool trendUpCurrent = fastBuf[0] > slowBuf[0] && fastBuf[1] > slowBuf[1];
+   bool trendDownCurrent = fastBuf[0] < slowBuf[0] && fastBuf[1] < slowBuf[1];
 
-   // --- RSI
-   int rsiHandle = iRSI(_Symbol, _Period, 14, PRICE_CLOSE);
+   // --- RSI với thiết lập làm mượt
+   int rsiHandle = iRSI(_Symbol, _Period, 21, PRICE_CLOSE);
    double rsiBuf[];
-   CopyBuffer(rsiHandle, 0, 0, 1, rsiBuf);
+   CopyBuffer(rsiHandle, 0, 0, 3, rsiBuf);
    double rsi = rsiBuf[0];
+   double rsiPrev = rsiBuf[1];
 
-   // --- MACD
+   // --- MACD với thiết lập làm mượt
    int macdHandle = iMACD(_Symbol, _Period, 12, 26, 9, PRICE_CLOSE);
    double macdMain[], macdSignal[];
-   CopyBuffer(macdHandle, 0, 0, 1, macdMain);
-   CopyBuffer(macdHandle, 1, 0, 1, macdSignal);
+   CopyBuffer(macdHandle, 0, 0, 3, macdMain);
+   CopyBuffer(macdHandle, 1, 0, 3, macdSignal);
    double macd = macdMain[0];
+   double macdPrev = macdMain[1];
 
-   // --- Price Action: hỗ trợ/kháng cự đơn giản (dùng High/Low gần nhất)
-   double lastHigh = iHigh(_Symbol, _Period, 1);
-   double lastLow  = iLow(_Symbol, _Period, 1);
+   // --- Price Action: xem xét nhiều nến hơn
+   double lastHigh = MathMax(iHigh(_Symbol, _Period, 1), iHigh(_Symbol, _Period, 2));
+   double lastLow  = MathMin(iLow(_Symbol, _Period, 1), iLow(_Symbol, _Period, 2));
    double price = iClose(_Symbol, _Period, 0);
 
+   // --- Điều kiện xác nhận xu hướng mạnh mẽ hơn
+   bool bullishCondition = trendUpHigher && trendUpCurrent && 
+                          rsi > 55 && rsi > rsiPrev && 
+                          macd > macdSignal[0] && macd > macdPrev &&
+                          price > lastHigh;
+
+   bool bearishCondition = trendDownHigher && trendDownCurrent && 
+                          rsi < 45 && rsi < rsiPrev && 
+                          macd < macdSignal[0] && macd < macdPrev &&
+                          price < lastLow;
+
    // --- Logic xác định xu hướng
-   if(fast > slow && rsi > 50 && macd > 0 && price > lastHigh)
+   if(bullishCondition)
    {
-      // Vẽ mũi tên BUY
-      name = "UpArrow_" + IntegerToString(t);
-      ObjectCreate(0, name, OBJ_ARROW_UP, 0, t, price);
-      ObjectSetInteger(0, name, OBJPROP_COLOR, clrLime);
-      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
-      return "UP";
+      return "UP_STRONG";
    }
-   else if(fast < slow && rsi < 50 && macd < 0 && price < lastLow)
+   else if(bearishCondition)
    {
-      name = "DownArrow_" + IntegerToString(t);
-      ObjectCreate(0, name, OBJ_ARROW_DOWN, 0, t, price);
-      ObjectSetInteger(0, name, OBJPROP_COLOR, clrRed);
-      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
-      return "DOWN";
+      return "DOWN_STRONG";
    }
    else
    {
-      return "➡️ Sideway / tín hiệu yếu";
+      // Kiểm tra xu hướng yếu hơn
+      bool weakBullish = trendUpCurrent && rsi > 50 && macd > 0 && price > lastHigh;
+      bool weakBearish = trendDownCurrent && rsi < 50 && macd < 0 && price < lastLow;
+      
+      if(weakBullish) 
+         return "UP_WEAK";
+      else if(weakBearish) 
+         return "DOWN_WEAK";
+      else
+         return "SIDEWAY";
    }
+}
+
+
+void drawArrow(string signal)
+{
+   double price = iClose(_Symbol, _Period, 0);
+   datetime t = TimeCurrent();
+   string arrowName = signal + "_ARROW_" + IntegerToString(t);
+   string textName  = signal + "_TEXT_"  + IntegerToString(t);
+
+   // Nếu là tín hiệu BUY
+   if(signal == "UP_WEAK" || signal == "UP_STRONG")
+   {
+      // Mũi tên BUY to rõ
+      ObjectCreate(0, arrowName, OBJ_ARROW_BUY, 0, t, price - 30 * _Point);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrLime);
+      ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
+
+      // Thêm chữ BUY phía trên mũi tên
+      ObjectCreate(0, textName, OBJ_TEXT, 0, t, price - 60 * _Point);
+      ObjectSetString(0, textName, OBJPROP_TEXT, signal);
+      ObjectSetInteger(0, textName, OBJPROP_COLOR, clrLime);
+      ObjectSetInteger(0, textName, OBJPROP_FONTSIZE, 12);
+      ObjectSetInteger(0, textName, OBJPROP_ANCHOR, ANCHOR_BOTTOM);
+   }
+
+   // Nếu là tín hiệu SELL
+   if(signal == "DOWN_WEAK" || signal == "DOWN_STRONG")
+   {
+      // Mũi tên SELL to rõ
+      ObjectCreate(0, arrowName, OBJ_ARROW_SELL, 0, t, price + 30 * _Point);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrRed);
+      ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
+
+      // Thêm chữ SELL phía trên mũi tên
+      ObjectCreate(0, textName, OBJ_TEXT, 0, t, price + 60 * _Point);
+      ObjectSetString(0, textName, OBJPROP_TEXT, signal);
+      ObjectSetInteger(0, textName, OBJPROP_COLOR, clrRed);
+      ObjectSetInteger(0, textName, OBJPROP_FONTSIZE, 12);
+      ObjectSetInteger(0, textName, OBJPROP_ANCHOR, ANCHOR_TOP);
+   }
+}
+
+ulong findWorstPosition()
+{
+   ulong worstTicket = 0;
+   double worstScore = -999999;  
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         
+         // Chỉ xét lệnh của bot (không phải lệnh manual)
+         if(magic == EXPERT_MAGIC || magic == Magic_Hedge)
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double currentPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 
+                                 SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+                                 SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                                 
+            double score = profit;  
+            
+            if(score < worstScore)
+            {
+               worstScore = score;
+               worstTicket = ticket;
+            }
+         }
+      }
+   }
+   
+   return worstTicket;
+}
+
+
+//+------------------------------------------------------------------+
+//| Tỉa lệnh thông minh dựa trên nhiều yếu tố                       |
+//+------------------------------------------------------------------+
+void tiaLenhThongMinh()
+{
+   if(PositionsTotal() < soLenhToiThieuDeTia) return;
+   
+   // 1. Tỉa theo xu hướng thị trường
+   if(currentTrend == "DOWN_STRONG" || currentTrend == "DOWN_WEAK") tiaLenhTheoTrend(POSITION_TYPE_BUY);
+   if(currentTrend == "UP_STRONG" || currentTrend == "UP_WEAK") tiaLenhTheoTrend(POSITION_TYPE_SELL);
+   
+   // 2. Tỉa theo mức drawdown
+   if(ddProfit < -AccountInfoDouble(ACCOUNT_BALANCE) * maxDrawdow) tiaLenhTheoRisk();
+   
+}
+
+//+------------------------------------------------------------------+
+//| Tỉa lệnh theo xu hướng thị trường                               |
+//+------------------------------------------------------------------+
+void tiaLenhTheoTrend(ENUM_POSITION_TYPE trendToClose)
+{
+   int closed = 0;
+   for(int i = PositionsTotal()-1; i >= 0 && closed < 2; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      if(PositionGetInteger(POSITION_TYPE) == trendToClose)
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         if(profit > 0) // Chỉ đóng lệnh có lời
+         {
+            trade.PositionClose(ticket);
+            closed++;
+            Print("✅ Đóng lệnh ", ticket , EnumToString(trendToClose), " theo trend | Lợi nhuận: ", profit);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Tỉa lệnh theo risk management                                   |
+//+------------------------------------------------------------------+
+void tiaLenhTheoRisk()
+{
+   double totalRisk = 0;
+   int closed = 0;
+   
+   // Sắp xếp lệnh theo mức độ rủi ro
+   for(int i = 0; i < 2; i++) // Đóng 2 lệnh xấu nhất
+   {
+      ulong worstTicket = findWorstPositionAdvanced();
+      if(worstTicket != 0)
+      {
+         PositionSelectByTicket(worstTicket);
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         trade.PositionClose(worstTicket);
+         Print("Đóng lệnh: " , worstTicket);
+         totalRisk += profit;
+         closed++;
+      }
+   }
+   
+   if(closed > 0) Print("⚠️ Đóng ", closed, " lệnh rủi ro | Tổng giảm lỗ: " , totalRisk);
+}
+
+//+------------------------------------------------------------------+
+//| Tìm lệnh xấu nhất phiên bản nâng cao                            |
+//+------------------------------------------------------------------+
+ulong findWorstPositionAdvanced()
+{
+   ulong worstTicket = 0;
+   double worstScore = -999999;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         if(magic == EXPERT_MAGIC || magic == Magic_Hedge)
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            double currentPrice = (type == POSITION_TYPE_BUY) ? 
+                                 SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+                                 SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+            
+            // 📊 CÔNG THỨC ĐIỂM THÔNG MINH:
+            double distance = MathAbs(currentPrice - entryPrice) / _Point;
+            double timeOpen = double(TimeCurrent() - PositionGetInteger(POSITION_TIME));
+            
+            // Điểm số kết hợp nhiều yếu tố
+            double score = profit * 0.5                    // Lợi nhuận (quan trọng nhất)
+                         + (profit / volume) * 0.3        // Lợi nhuận trên mỗi lot
+                         + distance * 0.1                 // Khoảng cách từ entry
+                         + timeOpen * 0.1;                // Thời gian mở lệnh
+            
+            // Phạt nặng lệnh ngược trend
+            if((type == POSITION_TYPE_BUY && (currentTrend == "DOWN_STRONG" || currentTrend == "DOWN_WEAK")) ||
+               (type == POSITION_TYPE_SELL && (currentTrend == "UP_STRONG" || currentTrend == "UP_WEAK")))
+            {
+               score *= 2; // Ưu tiên đóng gấp đôi
+            }
+            
+            if(score < worstScore)
+            {
+               worstScore = score;
+               worstTicket = ticket;
+            }
+         }
+      }
+   }
+   
+   return worstTicket;
 }
