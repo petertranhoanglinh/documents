@@ -12,6 +12,7 @@
 #define MAGIC_NUMBER 12345
 #define EXPERT_MAGIC 123456
 
+
 CTrade trade;
 CSymbolInfo symbolInfo;
 
@@ -52,11 +53,12 @@ input double volumnSell  = 0.01; // Số lot mở lệnh
 input double priceDCASell = 3; // Khoảng giá mua thêm 
 input double takeProfitSell = 3; // Chốt lời với khoảng giá
 double xVolumnSell = 1;
+datetime checkTimeDowntrend;
 
 
 
 input group "__2 Thêm BOT SELL Hỗ Trợ Khi Âm TK"
-input bool  openHedge  = true; // Tắt/Mở chức năng
+input bool  openHedge  = false; // Tắt/Mở chức năng
 input int conditonNumBuyOpen = 10; // Bắt đầu khi có số lệnh BUY đang mở
 input double  volumnHedge  = 0.01; // Số lot mở lệnh
 input double  priceSLTP  = 3; // Giá đặt Stoploss và Takeprofit
@@ -70,6 +72,7 @@ input double maxDrawdow = 30; // drawdow tài khoản cần tỉa viết 1 -> 10
 bool disableBuy = false;
 
 int Magic_Hedge = 111;
+int Magic_Trend = 1111;
 ulong ticketHedge = 0; 
 int countOpenBuy = 0;
 double ddProfit = 0;
@@ -97,7 +100,7 @@ int OnInit()
 {
    paintlable();
    halfTrendHandle = iCustom(_Symbol, _Period, 
-                             "SuperTrend",   // SỬA TÊN INDICATOR CHÍNH XÁC
+                             "SuperTrend",  
                              InpAmplitude,
                              InpCodeUpArrow,
                              InpCodeDnArrow,
@@ -132,14 +135,17 @@ void OnTick()
    signal = GetHalfTrendSignal();
    static datetime lastSignalTime = 0;
    datetime currentTime = iTime(_Symbol, _Period, 0);
-   
+   Print(signal);
+
    if(signal == 1) // UPTREND
     {
       Print("📈 UPTREND tại nến: ", TimeToString(currentTime));
       double lowPrice = iLow(_Symbol, _Period, 1);
       DrawText("UP_" + IntegerToString(currentTime), "UPTREND", currentTime, lowPrice, clrDeepSkyBlue);
+      disableBuy = false;  
       openSellDCA = false;
-         for(int i=PositionsTotal()-1; i>=0; i--)
+      checkTimeDowntrend = 0;
+      for(int i=PositionsTotal()-1; i>=0; i--)
       {
          ulong ticket = PositionGetTicket(i);
          if(PositionSelectByTicket(ticket))
@@ -162,14 +168,22 @@ void OnTick()
     }
     else if(signal == -1) // DOWNTREND
     {
-       openSellDCA = true;
-      //CloseLossingBuyOrders(50.0);
-      //disableBuy = true;
-      //xVolumnSell = 3;
+      openSellDCA = true;
+      checkTimeDowntrend = TimeCurrent();
       Print("📉 DOWNTREND tại nến: ", TimeToString(currentTime));
       double highPrice = iHigh(_Symbol, _Period, 1);
       DrawText("DOWN_" + IntegerToString(currentTime), "DOWNTREND", currentTime, highPrice, clrOrangeRed);
     }
+    
+   if(checkTimeDowntrend > 0)
+   {
+      if(TimeCurrent() > checkTimeDowntrend + (int)(60 * 60 * 24 * 2))
+      {
+         disableBuy = true;          
+         checkTimeDowntrend = 0;     
+         Print("⏱ DOWNTREND kéo dài > 1.5 ngày, disableBuy = true");
+      }
+   }
    lastSignalTime = currentTime;
    
    double minPriceBuy = DBL_MAX;
@@ -246,11 +260,11 @@ void OnTick()
       double spacePriceSELL = SymbolInfoDouble(_Symbol, SYMBOL_BID) - hightPriceSELL;
       if(totalPositonSELL == 0)
       {
-         openSELL("Lệnh đầu tiền");
+         openSELL("Lệnh đầu tiền" , volumnSell * xVolumnSell);
       }
       else if(spacePriceSELL > priceDCASell)
       {
-         openSELL("SELL|" + IntegerToString(totalPositonSELL) + "|");
+         openSELL("SELL|" + IntegerToString(totalPositonSELL) + "|" , volumnSell);
       }
    }
    
@@ -332,7 +346,13 @@ bool openBuy(double lot, double amountTakeProfit, string comment)
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double tp = price + amountTakeProfit;
    
-   trade.SetExpertMagicNumber(EXPERT_MAGIC);
+   if(comment == "BUY_TREND"){
+     trade.SetExpertMagicNumber(Magic_Trend);
+   }else{
+     trade.SetExpertMagicNumber(EXPERT_MAGIC);
+   }
+   
+   
    if(trade.Buy(lot, _Symbol, price, 0, tp, comment))
    {
       Print("✅ Send buy success!");
@@ -346,13 +366,24 @@ bool openBuy(double lot, double amountTakeProfit, string comment)
    }
 }
 
-bool openSELL(string comment)
+bool openSELL(string comment , double volumn)
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double tp = price - priceDCASell;
-   
-   trade.SetExpertMagicNumber(EXPERT_MAGIC);
-   if(trade.Sell(volumnSell * xVolumnSell, _Symbol, price, 0, tp, comment))
+   if(comment == "SELL_TREND"){
+     trade.SetExpertMagicNumber(Magic_Trend);
+   }else{
+    trade.SetExpertMagicNumber(EXPERT_MAGIC);
+   }
+   double slValue = 0;
+
+// Nếu là SELL_TREND thì đặt TP làm SL (ví dụ bạn đang muốn thế?)
+   if(comment == "SELL_TREND"){
+      slValue = tp;
+   }
+
+   if(trade.Sell(volumn, _Symbol, price, slValue, tp, comment))
+
    {
       Print("✅ Send Sell success!");
       return true;
@@ -747,9 +778,7 @@ int GetHalfTrendSignal()
 //| HÀM ĐÓNG LỆNH BUY LỖ - PHIÊN BẢN ĐƠN GIẢN                       |
 //+------------------------------------------------------------------+
 void CloseLossingBuyOrders(double maxLossUSD = 30.0)
-{    
-    CTrade trade;
-    
+{        
     for(int i = PositionsTotal()-1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -769,6 +798,46 @@ void CloseLossingBuyOrders(double maxLossUSD = 30.0)
                     Print("Lỗi đóng lệnh #", ticket, ": ", GetLastError());
             }
         }
+    }
+}
+
+
+//+------------------------------------------------------------------+
+//| HÀM ĐÓNG TẤT CẢ LỆNH THEO MAGIC NUMBER                          |
+//+------------------------------------------------------------------+
+void CloseAllMagicTrendOrders()
+{
+    int closedCount = 0;
+    
+    for(int i = PositionsTotal()-1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == Magic_Trend)
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            Print("Đóng lệnh #", ticket, " - ", symbol, 
+                  " - Volume: ", volume, " - Lợi nhuận: ", DoubleToString(profit, 2));
+            
+            if(trade.PositionClose(ticket))
+            {
+                closedCount++;
+                Print("✅ Đã đóng lệnh #", ticket, " thành công");
+            }
+            else
+            {
+                Print("❌ Lỗi đóng lệnh #", ticket, ": ", trade.ResultRetcodeDescription());
+            }
+        }
+    }
+    
+    if(closedCount > 0)
+    {
+        Print("Đã đóng ", closedCount, " lệnh với Magic Number: ", Magic_Trend);
     }
 }
 
