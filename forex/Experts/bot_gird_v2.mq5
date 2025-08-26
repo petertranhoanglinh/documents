@@ -152,17 +152,14 @@ void OnTick()
 {
    updateReport(); 
    datetime currentTime = iTime(_Symbol, _Period, 0);
-    
    datetime signalTime;
    double signalPrice;
    signal = GetHalfTrendSignal(signalTime, signalPrice);
-   
    if(signal != 0)
    {
       string trendText = (signal == 1) ? "UPTREND" : "DOWNTREND";
       Print("Tín hiệu ", trendText, " tại: ", TimeToString(signalTime), 
             ", Giá: ", DoubleToString(signalPrice, _Digits));
-            
       //--- Kiểm tra đây có phải tín hiệu mới không
       static datetime lastSignalTime = 0;
       CloseAllMagicTrendOrders();
@@ -170,7 +167,6 @@ void OnTick()
       {
          lastSignalTime = signalTime;
          Print("TÍN HIỆU MỚI: ", trendText, " - Xử lý giao dịch...");
-         
          //--- Thêm logic giao dịch của bạn ở đây
          if(signal == 1) 
          {
@@ -182,7 +178,6 @@ void OnTick()
          }
          else if(signal == -1) 
          {
-            
             downtrendStartPrice = iHigh(_Symbol, _Period, 1);
             downtrendStartTime = TimeCurrent();
             double highPrice = iHigh(_Symbol, _Period, 1);
@@ -195,32 +190,21 @@ void OnTick()
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);    // vốn thực tế hiện tại
    double profit  = equity - balance; 
    Print("DrawDown là: " , MathAbs(profit) / equity);     
-   
    double drawDown = MathAbs(profit) / equity;
-   
    if(rateDropDownDisableBuy / 100 > drawDown){
      disableBuy = true;
    }
-   
-  
-   
    if(downtrendStartTime > 0 && downtrendStartPrice > 0  ){
       double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double priceDrop = (downtrendStartPrice - currentPrice) / _Point;
-      
       if((downtrendStartPrice - currentPrice) > 50 && drawDown > 0.2){
         CloseLossingBuyOrders(60);
       }
    }
-    
-  
-   
    if (drawDown > 0.05 && signal == -1){
      xPriceDca = 1.2; 
      openSellTrend();
    }
-    
-   
    if (drawDown < 0.1){
       disableBuy = false;
       openSellDCA = false;
@@ -263,7 +247,6 @@ void OnTick()
          totalPositonHedge++;
       }
    }
-   
    // Handle BUY
    if(totalPositonBUY == 0)
    {
@@ -276,13 +259,11 @@ void OnTick()
       double takeprofit = 0; 
       double spacePriceBUY = minPriceBuy - SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       getValuePosition(totalPositonBUY, priceDCA, volumn, takeprofit);
-      
       if(spacePriceBUY > priceDCA) 
       {
          openBuy(volumn * xPriceDca, takeprofit, "BUY|" + IntegerToString(totalPositonBUY) + "|");
       }
    } 
-   
    // Handle SELL DCA 
    if(openSellDCA == true)
    {
@@ -296,7 +277,6 @@ void OnTick()
          openSELL("DCA SELL|" + IntegerToString(totalPositonSELL) + "|" , volumnSell);
       }
    }
-   
    // Handle SELL HEDGE
    if(openHedge == true && totalPositonHedge == 0)
    {
@@ -314,7 +294,6 @@ void OnTick()
          {
             return;
          }
-         
          int totalDeals = HistoryDealsTotal();
          Print("totalDeals = " + IntegerToString(totalDeals));
          for(int i = totalDeals-1; i >= 0; i--)
@@ -322,11 +301,9 @@ void OnTick()
             ulong dealTicket = HistoryDealGetTicket(i);
             if(dealTicket <= 0) 
                continue;
-            
             ulong positionTicket = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
             if(positionTicket != ticketHedge)
                continue;
-            
             ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);   
             double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
             double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
@@ -354,11 +331,9 @@ void OnTick()
       }
    }
 }
-
 //+------------------------------------------------------------------+
 //| Các hàm hỗ trợ                                                   |
 //+------------------------------------------------------------------+
-
 bool openBuy(double lot, double amountTakeProfit, string comment)
 {
    if(disableBuy)
@@ -474,7 +449,6 @@ void updateReport()
    double khoangGia = leftPostion * 3;
    double priceStopLoss = currenPrice - khoangGia;
    int sumProfit = (countOpenBuy - totalPosition) * 3;
-   
    ObjectSetString(0, "stoploss", OBJPROP_TEXT, "Profit:" + IntegerToString(sumProfit) + " | " + DoubleToString(ddProfit, 1) + " |SL :" + DoubleToString(priceStopLoss, 1) + " | " + DoubleToString(khoangGia, 1));         
 }
 
@@ -496,7 +470,6 @@ ulong findWorstPosition()
 {
    ulong worstTicket = 0;
    double worstScore = -999999;  
-   
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
@@ -523,8 +496,7 @@ ulong findWorstPosition()
             }
          }
       }
-   }
-   
+   }  
    return worstTicket;
 }
 
@@ -578,11 +550,8 @@ ulong findWorstPositionAdvanced()
          }
       }
    }
-   
    return worstTicket;
 }
-
-
 //+------------------------------------------------------------------+
 //| Hàm vẽ chữ trên chart                                            |
 //+------------------------------------------------------------------+
@@ -763,8 +732,6 @@ void CloseLossingBuyOrders(double rateClose)
     
     Print("Đã đóng thành công ", closedCount, "/", ordersToClose, " lệnh (ưu tiên lệnh xa nhất trước)");
 }
-
-
 //+------------------------------------------------------------------+
 //| HÀM ĐÓNG TẤT CẢ LỆNH THEO MAGIC NUMBER                          |
 //+------------------------------------------------------------------+
