@@ -743,14 +743,11 @@ void CloseAllMagicTrendOrders()
     {
         ulong ticket = PositionGetTicket(i);
         if(ticket <= 0) continue;
-        
         if(PositionGetInteger(POSITION_MAGIC) == Magic_Trend)
         {
             string symbol = PositionGetString(POSITION_SYMBOL);
             double profit = PositionGetDouble(POSITION_PROFIT);
             double volume = PositionGetDouble(POSITION_VOLUME);
-            
-            
             if(profit < 3){
                return;
             }
@@ -765,7 +762,6 @@ void CloseAllMagicTrendOrders()
             }
         }
     }
-    
     if(closedCount > 0)
     {
         Print("Đã đóng ", closedCount, " lệnh với Magic Number: ", Magic_Trend);
