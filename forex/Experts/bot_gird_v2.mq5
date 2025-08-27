@@ -100,15 +100,17 @@ double lastProfitInDowntrend = 0;
 int currentSign = 0;
 
 
- int totalPositonBUY = 0;
- int totalPositonSELL = 0;
- int totalPositonHedge = 0;
- int totalProfitBuy = 0;
- int totalProfitSell = 0;
+int totalPositonBUY = 0;
+int totalPositonSELL = 0;
+int totalPositonHedge = 0;
+int totalProfitBuy = 0;
+int totalProfitSell = 0;
 double downtrendStartPrice = 0; // Giá khi bắt đầu downtrend
 datetime downtrendStartTime = 0; // Thời gian bắt đầu downtrend
 
 double deposit = 0;
+
+ulong ticketLostest = 0;
 
 
 //+------------------------------------------------------------------+
@@ -162,7 +164,7 @@ void OnTick()
             ", Giá: ", DoubleToString(signalPrice, _Digits));
       //--- Kiểm tra đây có phải tín hiệu mới không
       static datetime lastSignalTime = 0;
-      CloseAllMagicTrendOrders();
+     
       if(signalTime > lastSignalTime)
       {
          lastSignalTime = signalTime;
@@ -170,6 +172,7 @@ void OnTick()
          //--- Thêm logic giao dịch của bạn ở đây
          if(signal == 1) 
          {
+            CloseAllMagicTrendOrders();
             double lowPrice = iLow(_Symbol, _Period, 1);
             xPriceDca = 1;
             DrawText("UP_" + IntegerToString(currentTime), "UPTREND", currentTime, lowPrice, clrDeepSkyBlue);
@@ -198,7 +201,7 @@ void OnTick()
       double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double priceDrop = (downtrendStartPrice - currentPrice) / _Point;
       if((downtrendStartPrice - currentPrice) > 50 && drawDown > 0.2){
-        CloseLossingBuyOrders(60);
+        CloseLossingBuyOrders(10);
       }
    }
    if (drawDown > 0.05 && signal == -1){
@@ -368,7 +371,7 @@ bool openSELL(string comment , double volumn)
    double slValue = 0;
    
    if(comment == "SELL_TREND"){
-      slValue =  price + takeProfitSell;
+      //slValue =  price + takeProfitSell;
    }
 
    if(trade.Sell(volumn, _Symbol, price, slValue, tp, comment))
@@ -775,17 +778,23 @@ bool CanOpenSellTrend()
     double totalBuyProfit = 0.0;
     bool hasLossingBuy = false;
     
+    // Biến mới để lưu trữ giá mở của lệnh SELL gần nhất
+    double lastSellOpenPrice = 0.0;
+    bool foundRecentSell = false;
+    datetime recentSellTime = 0;
+    
     for(int i = PositionsTotal()-1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
         if(ticket <= 0) continue;
         
-        if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
-           PositionGetInteger(POSITION_MAGIC) == EXPERT_MAGIC)
+        if(PositionGetString(POSITION_SYMBOL) == _Symbol && (PositionGetInteger(POSITION_MAGIC) == EXPERT_MAGIC  || PositionGetInteger(POSITION_MAGIC) == Magic_Trend)  )
         {
             double profit = PositionGetDouble(POSITION_PROFIT);
             double volume = PositionGetDouble(POSITION_VOLUME);
             int type = (int)PositionGetInteger(POSITION_TYPE);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
             
             if(type == POSITION_TYPE_BUY)
             {
@@ -799,14 +808,37 @@ bool CanOpenSellTrend()
             else if(type == POSITION_TYPE_SELL)
             {
                 totalSellVolume += volume;
+                
+                // Tìm lệnh SELL gần nhất
+                if(openTime > recentSellTime &&  PositionGetInteger(POSITION_MAGIC) == Magic_Trend)
+                {
+                    recentSellTime = openTime;
+                    lastSellOpenPrice = openPrice;
+                    foundRecentSell = true;
+                }
             }
         }
     }
-    totalBuyVolume = totalBuyVolume +  (MathAbs(totalBuyProfit) / 3.0 * 0.01);
+    
+    totalBuyVolume = totalBuyVolume + (MathAbs(totalBuyProfit) / 3.0 * 0.01);
+    
+    // Lấy giá hiện tại
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    bool priceCondition = true; 
+    if(foundRecentSell)
+    {
+        if(lastSellOpenPrice - currentPrice > 2){
+          priceCondition = true;
+        }else{
+          priceCondition = false;
+        }
+    }
+    
     if(totalBuyVolume > totalSellVolume && 
        hasLossingBuy && 
        totalBuyProfit < 0 && 
-       totalBuyVolume >= 0.1)
+       totalBuyVolume >= 0.1 &&
+       priceCondition) // Thêm điều kiện giá
     {
         return true;
     }
@@ -843,8 +875,38 @@ void openSellTrend(){
           }
           if(positionInCycle < 50 && totalPositonSELL < 50)
           {
-              openSELL("SELL_TREND", 0.01);
+              openSELL("SELL_TREND", lotSize);
+              ticketLostest = findWorstPositionAdvanced();
           } 
    }
+}
+
+double GetProfitByTicket(ulong ticketNumber)
+{
+    int prevSelected = PositionsTotal();
+    ulong prevTicket = 0;
+    
+    if(PositionGetTicket(0)) 
+    {
+        prevTicket = PositionGetInteger(POSITION_TICKET);
+    }
+    if(PositionSelectByTicket(ticketNumber))
+    {
+        double profit = PositionGetDouble(POSITION_PROFIT);
+        
+        // Khôi phục selection trước đó
+        if(prevTicket > 0)
+            PositionSelectByTicket(prevTicket);
+        else if(prevSelected > 0)
+            PositionGetTicket(0); // Chọn position đầu tiên
+        
+        return profit;
+    }
+    if(prevTicket > 0)
+        PositionSelectByTicket(prevTicket);
+    else if(prevSelected > 0)
+        PositionGetTicket(0); 
+    
+    return 0.0;
 }
 //+------------------------------------------------------------------+
